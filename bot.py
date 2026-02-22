@@ -187,6 +187,14 @@ def download_instagram_sync(url: str) -> list:
         filename_pattern=shortcode + '_{mediaid}',
     )
 
+    ig_user = os.environ.get('INSTAGRAM_USER')
+    ig_pass = os.environ.get('INSTAGRAM_PASS')
+    if ig_user and ig_pass:
+        try:
+            L.login(ig_user, ig_pass)
+        except Exception:
+            pass
+
     post = instaloader.Post.from_shortcode(L.context, shortcode)
     L.download_post(post, target=DOWNLOAD_PATH)
 
