@@ -166,6 +166,10 @@ def is_valid_url(text: str) -> bool:
     return text.startswith(('http://', 'https://')) and '.' in text
 
 
+def is_instagram_url(url: str) -> bool:
+    return 'instagram.com' in url
+
+
 def get_instagram_shortcode(url: str) -> str | None:
     match = re.search(r'/(?:p|reel|tv)/([A-Za-z0-9_-]+)', url)
     return match.group(1) if match else None
@@ -547,6 +551,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     status_msg = await update.message.reply_text(t(chat_id, 'getting_info'))
+
+    # Instagram — сразу через instaloader, минуя yt-dlp (избегаем 429)
+    if is_instagram_url(url):
+        await status_msg.edit_text(t(chat_id, 'downloading'))
+        loop = asyncio.get_running_loop()
+        try:
+            results = await loop.run_in_executor(None, download_instagram_sync, url)
+            if results:
+                for result in results:
+                    await send_file(chat_id, result['filepath'], result['title'], context)
+                for result in results:
+                    if result['filepath'] and os.path.exists(result['filepath']):
+                        os.remove(result['filepath'])
+            else:
+                await status_msg.edit_text(t(chat_id, 'instagram_failed'))
+        except Exception as e:
+            await status_msg.edit_text(t(chat_id, 'instagram_error', e))
+        return
 
     try:
         ydl_opts = {'quiet': True, 'no_warnings': True}
