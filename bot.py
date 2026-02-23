@@ -56,6 +56,11 @@ STRINGS = {
         'kb_s': 'КБ/с',
         'of': 'из',
         'mb': 'МБ',
+        'large_file_choice': 'Файл {:.0f} МБ — больше лимита Telegram (50 МБ). Что делать?',
+        'btn_split': '✂️ Разбить на {} части',
+        'btn_compress': '📉 Сжать (1 файл, хуже качество)',
+        'compressing': 'Сжимаю видео...',
+        'compress_failed': 'Не удалось сжать видео.',
     },
     'en': {
         'welcome': (
@@ -84,6 +89,11 @@ STRINGS = {
         'kb_s': 'KB/s',
         'of': 'of',
         'mb': 'MB',
+        'large_file_choice': 'File is {:.0f} MB — exceeds Telegram limit (50 MB). What to do?',
+        'btn_split': '✂️ Split into {} parts',
+        'btn_compress': '📉 Compress (1 file, lower quality)',
+        'compressing': 'Compressing video...',
+        'compress_failed': 'Failed to compress video.',
     },
     'kz': {
         'welcome': (
@@ -112,6 +122,11 @@ STRINGS = {
         'kb_s': 'КБ/с',
         'of': '/',
         'mb': 'МБ',
+        'large_file_choice': 'Файл {:.0f} МБ — Telegram лимитінен асады (50 МБ). Не істеу керек?',
+        'btn_split': '✂️ {} бөлікке бөлу',
+        'btn_compress': '📉 Сығу (1 файл, сапасы төмен)',
+        'compressing': 'Бейне сығылуда...',
+        'compress_failed': 'Бейнені сығу мүмкін болмады.',
     },
     'uk': {
         'welcome': (
@@ -140,6 +155,11 @@ STRINGS = {
         'kb_s': 'КБ/с',
         'of': 'з',
         'mb': 'МБ',
+        'large_file_choice': 'Файл {:.0f} МБ — перевищує ліміт Telegram (50 МБ). Що робити?',
+        'btn_split': '✂️ Розбити на {} частини',
+        'btn_compress': '📉 Стиснути (1 файл, гірша якість)',
+        'compressing': 'Стискаю відео...',
+        'compress_failed': 'Не вдалося стиснути відео.',
     },
 }
 
@@ -249,6 +269,40 @@ def split_video_sync(filepath: str, max_mb: float = 40) -> list[str]:
             else:
                 os.remove(out)
     return parts
+
+
+def compress_video_sync(filepath: str, target_mb: float = 45) -> str | None:
+    """Сжимает видео до target_mb МБ через расчёт целевого битрейта"""
+    probe = subprocess.run(
+        ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+         '-of', 'default=noprint_wrappers=1:nokey=1', filepath],
+        capture_output=True, text=True
+    )
+    try:
+        duration = float(probe.stdout.strip())
+    except ValueError:
+        return None
+
+    target_bits = target_mb * 1024 * 1024 * 8
+    audio_bits = 128 * 1000 * duration
+    video_bits = target_bits - audio_bits
+    video_bitrate = max(int(video_bits / duration / 1000), 100)  # kbps
+
+    output = os.path.splitext(filepath)[0] + '_compressed.mp4'
+    result = subprocess.run(
+        ['ffmpeg', '-i', filepath,
+         '-c:v', 'libx264', '-preset', 'ultrafast',
+         '-b:v', f'{video_bitrate}k',
+         '-vf', 'scale=trunc(min(iw\\,1280)/2)*2:-2',
+         '-threads', '2',
+         '-c:a', 'aac', '-b:a', '128k',
+         '-movflags', '+faststart',
+         '-y', output],
+        capture_output=True
+    )
+    if result.returncode == 0 and os.path.exists(output):
+        return output
+    return None
 
 
 def get_video_codec(filepath: str) -> str:
@@ -489,10 +543,35 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             await context.bot.send_message(chat_id, t(chat_id, 'download_failed'))
             return
 
-        downloaded_paths = [r['filepath'] for r in results]
-
         for result in results:
-            await send_file(chat_id, result['filepath'], result['title'], context)
+            filepath = result['filepath']
+            filesize = os.path.getsize(filepath)
+            ext = os.path.splitext(filepath)[1].lower()
+
+            if filesize > MAX_FILE_SIZE and ext not in IMAGE_EXTS:
+                # Спрашиваем пользователя что делать с большим файлом
+                n_parts = math.ceil(filesize / (40 * 1024 * 1024))
+                user_data.setdefault(chat_id, {})['pending_large'] = {
+                    'filepath': filepath,
+                    'title': result['title'],
+                }
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        t(chat_id, 'btn_split', n_parts), callback_data='act_split'
+                    )],
+                    [InlineKeyboardButton(
+                        t(chat_id, 'btn_compress'), callback_data='act_compress'
+                    )],
+                ])
+                await context.bot.send_message(
+                    chat_id,
+                    t(chat_id, 'large_file_choice', filesize / 1024 / 1024),
+                    reply_markup=keyboard
+                )
+                # Файл не удаляем — он нужен для обработки по кнопке
+            else:
+                downloaded_paths.append(filepath)
+                await send_file(chat_id, filepath, result['title'], context)
 
     except yt_dlp.utils.DownloadError as e:
         if 'no video' in str(e).lower() or 'there is no video' in str(e).lower():
@@ -640,12 +719,60 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    # Действие с большим файлом
+    if data in ('act_split', 'act_compress'):
+        pending = (user_data.get(chat_id) or {}).pop('pending_large', None)
+        if not pending or not os.path.exists(pending['filepath']):
+            await query.edit_message_text(t(chat_id, 'session_expired'))
+            return
+
+        filepath = pending['filepath']
+        loop = asyncio.get_running_loop()
+
+        if data == 'act_split':
+            filesize = os.path.getsize(filepath)
+            n_parts = math.ceil(filesize / (40 * 1024 * 1024))
+            await query.edit_message_text(
+                t(chat_id, 'splitting', filesize / 1024 / 1024, n_parts)
+            )
+            part_paths = await loop.run_in_executor(None, split_video_sync, filepath)
+            if not part_paths:
+                await context.bot.send_message(chat_id, t(chat_id, 'split_failed'))
+            else:
+                w, h = get_video_dimensions(filepath)
+                for i, part in enumerate(part_paths, 1):
+                    with open(part, 'rb') as f:
+                        await context.bot.send_video(
+                            chat_id, video=f, supports_streaming=True,
+                            width=w or None, height=h or None,
+                            caption=t(chat_id, 'part', i, len(part_paths))
+                        )
+                    os.remove(part)
+
+        else:  # act_compress
+            await query.edit_message_text(t(chat_id, 'compressing'))
+            compressed = await loop.run_in_executor(None, compress_video_sync, filepath)
+            if not compressed:
+                await context.bot.send_message(chat_id, t(chat_id, 'compress_failed'))
+            else:
+                w, h = get_video_dimensions(compressed)
+                with open(compressed, 'rb') as f:
+                    await context.bot.send_video(
+                        chat_id, video=f, supports_streaming=True,
+                        width=w or None, height=h or None
+                    )
+                os.remove(compressed)
+
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        return
+
     # Выбор качества видео
-    if chat_id not in user_data:
+    if chat_id not in user_data or 'url' not in user_data.get(chat_id, {}):
         await query.edit_message_text(t(chat_id, 'session_expired'))
         return
 
-    url = user_data.pop(chat_id)['url']
+    url = user_data[chat_id].pop('url')
     status_msg = await query.edit_message_text(t(chat_id, 'downloading'))
     await download_and_send(url, chat_id, context, format_id=data, status_msg=status_msg)
 
