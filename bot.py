@@ -211,7 +211,7 @@ def download_instagram_sync(url: str) -> list:
     return results
 
 
-def split_video_sync(filepath: str, max_mb: float = 45) -> list[str]:
+def split_video_sync(filepath: str, max_mb: float = 40) -> list[str]:
     probe = subprocess.run(
         ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
          '-of', 'default=noprint_wrappers=1:nokey=1', filepath],
@@ -223,6 +223,7 @@ def split_video_sync(filepath: str, max_mb: float = 45) -> list[str]:
         return []
 
     filesize = os.path.getsize(filepath)
+    # Используем 40 МБ как цель чтобы части не превышали лимит Telegram при VBR
     n_parts = math.ceil(filesize / (max_mb * 1024 * 1024))
     part_duration = duration / n_parts
 
@@ -238,7 +239,11 @@ def split_video_sync(filepath: str, max_mb: float = 45) -> list[str]:
             capture_output=True
         )
         if os.path.exists(out):
-            parts.append(out)
+            # Если часть всё равно больше 48 МБ — пропускаем (защита от VBR)
+            if os.path.getsize(out) <= 48 * 1024 * 1024:
+                parts.append(out)
+            else:
+                os.remove(out)
     return parts
 
 
@@ -398,7 +403,7 @@ async def send_file(chat_id: int, filepath: str, title: str, context: ContextTyp
                 )
                 return
 
-            n_parts = math.ceil(filesize / (45 * 1024 * 1024))
+            n_parts = math.ceil(filesize / (40 * 1024 * 1024))
             await context.bot.send_message(
                 chat_id,
                 t(chat_id, 'splitting', filesize / 1024 / 1024, n_parts)
