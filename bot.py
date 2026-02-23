@@ -265,7 +265,9 @@ def transcode_to_h264_sync(filepath: str) -> str | None:
     output = os.path.splitext(filepath)[0] + '_h264.mp4'
     result = subprocess.run(
         ['ffmpeg', '-i', filepath,
-         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+         '-vf', 'scale=trunc(min(iw\\,1280)/2)*2:-2',
+         '-threads', '2',
          '-c:a', 'aac', '-b:a', '128k',
          '-movflags', '+faststart',
          '-y', output],
