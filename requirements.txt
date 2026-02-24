@@ -4,3 +4,4 @@ python-dotenv
 instaloader
 pyrogram
 tgcrypto
+gallery-dl

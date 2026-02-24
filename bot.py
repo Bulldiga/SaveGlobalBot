@@ -210,34 +210,40 @@ def get_instagram_shortcode(url: str) -> str | None:
 
 
 def download_instagram_sync(url: str) -> list:
+    import sys
     cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instagram_cookies.txt')
-    opts = {
-        'outtmpl': os.path.join(DOWNLOAD_PATH, '%(id)s.%(ext)s'),
-        'quiet': True,
-        'no_warnings': True,
-        'format': 'bestvideo+bestaudio/bestvideo/best',
-        'merge_output_format': 'mp4',
-        'http_headers': {
-            'X-IG-App-ID': '936619743392459',
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-        },
-    }
+
+    venv_bin = os.path.dirname(sys.executable)
+    gallery_dl_bin = os.path.join(venv_bin, 'gallery-dl')
+    if not os.path.exists(gallery_dl_bin):
+        gallery_dl_bin = 'gallery-dl'
+
+    cmd = [gallery_dl_bin, '-D', DOWNLOAD_PATH]
     if os.path.exists(cookies_file):
-        opts['cookiefile'] = cookies_file
+        cmd.extend(['--cookies', cookies_file])
+    cmd.append(url)
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+
+    if proc.returncode != 0:
+        error_out = proc.stderr.strip() or proc.stdout.strip() or 'gallery-dl failed'
+        raise Exception(error_out)
 
     results = []
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        entries = info.get('entries') if info.get('_type') == 'playlist' else [info]
-        for entry in (entries or [info]):
-            if not entry:
-                continue
-            filepath = find_downloaded_file(ydl, entry)
-            if filepath and os.path.exists(filepath):
-                results.append({
-                    'filepath': filepath,
-                    'title': (entry.get('title') or 'instagram')[:80],
-                })
+    for line in proc.stdout.strip().split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        filepath = os.path.abspath(line)
+        if os.path.exists(filepath):
+            results.append({
+                'filepath': filepath,
+                'title': os.path.splitext(os.path.basename(filepath))[0][:80],
+            })
+
+    if not results:
+        raise Exception('No files downloaded')
+
     return results
 
 
