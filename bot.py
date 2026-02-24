@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 import yt_dlp
-import instaloader
 
 try:
     from pyrogram import Client as PyroClient
@@ -211,49 +210,29 @@ def get_instagram_shortcode(url: str) -> str | None:
 
 
 def download_instagram_sync(url: str) -> list:
-    shortcode = get_instagram_shortcode(url)
-    if not shortcode:
-        return []
+    cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instagram_cookies.txt')
+    opts = {
+        'outtmpl': os.path.join(DOWNLOAD_PATH, '%(id)s.%(ext)s'),
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4',
+    }
+    if os.path.exists(cookies_file):
+        opts['cookiefile'] = cookies_file
 
-    L = instaloader.Instaloader(
-        download_videos=True,
-        download_video_thumbnails=False,
-        download_geotags=False,
-        download_comments=False,
-        save_metadata=False,
-        compress_json=False,
-        dirname_pattern=DOWNLOAD_PATH,
-        filename_pattern=shortcode + '_{mediaid}',
-    )
-
-    ig_user = os.environ.get('INSTAGRAM_USER')
-    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f'session-{ig_user}') if ig_user else None
-    if session_file and os.path.exists(session_file):
-        try:
-            L.load_session_from_file(ig_user, session_file)
-        except Exception:
-            pass
-    elif ig_user:
-        ig_pass = os.environ.get('INSTAGRAM_PASS')
-        if ig_pass:
-            try:
-                L.login(ig_user, ig_pass)
-            except Exception:
-                pass
-
-    post = instaloader.Post.from_shortcode(L.context, shortcode)
-    L.download_post(post, target=DOWNLOAD_PATH)
-
-    title = (post.caption or shortcode)[:80].strip()
     results = []
-
-    for fname in os.listdir(DOWNLOAD_PATH):
-        if fname.startswith(shortcode) and not fname.endswith(('.txt', '.json', '.xz')):
-            results.append({
-                'filepath': os.path.join(DOWNLOAD_PATH, fname),
-                'title': title,
-            })
-
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        entries = info.get('entries') if info.get('_type') == 'playlist' else [info]
+        for entry in (entries or [info]):
+            if not entry:
+                continue
+            filepath = find_downloaded_file(ydl, entry)
+            if filepath and os.path.exists(filepath):
+                results.append({
+                    'filepath': filepath,
+                    'title': (entry.get('title') or 'instagram')[:80],
+                })
     return results
 
 
