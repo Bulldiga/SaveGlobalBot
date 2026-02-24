@@ -645,7 +645,7 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             'format': f'{format_id}+bestaudio/bestaudio/best' if format_id else 'bestvideo+bestaudio/best',
             'merge_output_format': 'mp4',
             'progress_hooks': [make_progress_hook(progress_state)],
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+            'extractor_args': {'youtube': {'player_client': ['ios']}},
         }
         if os.path.exists(YOUTUBE_COOKIES):
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES
@@ -780,7 +780,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+            'extractor_args': {'youtube': {'player_client': ['ios']}},
         }
         if os.path.exists(YOUTUBE_COOKIES):
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES
@@ -828,11 +828,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(t(chat_id, 'choose_quality'), reply_markup=reply_markup)
 
     except yt_dlp.utils.DownloadError as e:
-        err = str(e)
-        if 'no video' in err.lower() or 'there is no video' in err.lower():
+        err = str(e).lower()
+        if 'no video' in err or 'there is no video' in err or 'requested format' in err or 'only images' in err:
             await status_msg.edit_text(t(chat_id, 'downloading'))
             await download_and_send(url, chat_id, context, status_msg=status_msg)
-        elif 'login' in err.lower() or 'sign in' in err.lower():
+        elif 'login' in err or 'sign in' in err:
             await status_msg.edit_text(t(chat_id, 'auth_required'))
         else:
             await status_msg.edit_text(t(chat_id, 'error', e))
