@@ -1,6 +1,7 @@
 import os
 import re
 import math
+import time
 import asyncio
 import subprocess
 from dotenv import load_dotenv
@@ -8,6 +9,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 import yt_dlp
 import instaloader
+
+try:
+    from pyrogram import Client as PyroClient
+    PYROGRAM_AVAILABLE = True
+except ImportError:
+    PYROGRAM_AVAILABLE = False
+    PyroClient = None
 
 # ===== НАСТРОЙКИ =====
 load_dotenv()
@@ -27,13 +35,16 @@ user_data = {}
 # {chat_id: 'ru'|'en'|'kz'|'uk'}
 user_lang = {}
 
+# Pyrogram client for large file uploads (>50 MB, up to 2 GB)
+pyro_app = None
+
 # ===== ПЕРЕВОДЫ =====
 STRINGS = {
     'ru': {
         'welcome': (
             'Привет! Отправь мне ссылку на видео или публикацию '
-            'с YouTube, Instagram или TikTok.\n\n'
-            'Поддерживается: видео, Reels, фото-посты, карусели Instagram.'
+            'с YouTube, Instagram, TikTok или Twitch.\n\n'
+            'Поддерживается: видео, длинные стримы, Reels, фото-посты, карусели Instagram.'
         ),
         'choose_lang': 'Выберите язык:',
         'lang_set': 'Язык изменён на Русский 🇷🇺',
@@ -61,12 +72,13 @@ STRINGS = {
         'btn_compress': '📉 Сжать (1 файл, хуже качество)',
         'compressing': 'Сжимаю видео...',
         'compress_failed': 'Не удалось сжать видео.',
+        'uploading': 'Отправляю файл',
     },
     'en': {
         'welcome': (
             'Hello! Send me a link to a video or post '
-            'from YouTube, Instagram, or TikTok.\n\n'
-            'Supported: videos, Reels, photo posts, Instagram carousels.'
+            'from YouTube, Instagram, TikTok, or Twitch.\n\n'
+            'Supported: videos, long streams, Reels, photo posts, Instagram carousels.'
         ),
         'choose_lang': 'Choose language:',
         'lang_set': 'Language changed to English 🇬🇧',
@@ -94,12 +106,13 @@ STRINGS = {
         'btn_compress': '📉 Compress (1 file, lower quality)',
         'compressing': 'Compressing video...',
         'compress_failed': 'Failed to compress video.',
+        'uploading': 'Uploading file',
     },
     'kz': {
         'welcome': (
-            'Сәлем! Маған YouTube, Instagram немесе TikTok-тан '
+            'Сәлем! Маған YouTube, Instagram, TikTok немесе Twitch-тен '
             'бейне немесе жарияланым сілтемесін жіберіңіз.\n\n'
-            'Қолдау: бейнелер, Reels, фото жарияланымдар, Instagram карусельдері.'
+            'Қолдау: бейнелер, ұзын стримдер, Reels, фото жарияланымдар, Instagram карусельдері.'
         ),
         'choose_lang': 'Тілді таңдаңыз:',
         'lang_set': 'Тіл Қазақшаға өзгертілді 🇰🇿',
@@ -127,12 +140,13 @@ STRINGS = {
         'btn_compress': '📉 Сығу (1 файл, сапасы төмен)',
         'compressing': 'Бейне сығылуда...',
         'compress_failed': 'Бейнені сығу мүмкін болмады.',
+        'uploading': 'Файл жүктеп салынуда',
     },
     'uk': {
         'welcome': (
             'Привіт! Надішли мені посилання на відео або публікацію '
-            'з YouTube, Instagram або TikTok.\n\n'
-            'Підтримується: відео, Reels, фото-пости, каруселі Instagram.'
+            'з YouTube, Instagram, TikTok або Twitch.\n\n'
+            'Підтримується: відео, довгі стріми, Reels, фото-пости, каруселі Instagram.'
         ),
         'choose_lang': 'Оберіть мову:',
         'lang_set': 'Мову змінено на Українську 🇺🇦',
@@ -160,6 +174,7 @@ STRINGS = {
         'btn_compress': '📉 Стиснути (1 файл, гірша якість)',
         'compressing': 'Стискаю відео...',
         'compress_failed': 'Не вдалося стиснути відео.',
+        'uploading': 'Вивантажую файл',
     },
 }
 
@@ -350,6 +365,78 @@ def get_video_dimensions(filepath: str) -> tuple[int, int]:
         return 0, 0
 
 
+async def init_pyrogram():
+    global pyro_app
+    if not PYROGRAM_AVAILABLE:
+        return
+    api_id = os.environ.get('TELEGRAM_API_ID')
+    api_hash = os.environ.get('TELEGRAM_API_HASH')
+    if not api_id or not api_hash:
+        return
+    try:
+        pyro_app = PyroClient(
+            'bot_session',
+            api_id=int(api_id),
+            api_hash=api_hash,
+            bot_token=TOKEN,
+        )
+        await pyro_app.start()
+        print('Pyrogram started — large file support enabled (up to 2 GB)')
+    except Exception as e:
+        print(f'Pyrogram init failed: {e}')
+        pyro_app = None
+
+
+async def shutdown_pyrogram():
+    global pyro_app
+    if pyro_app:
+        try:
+            await pyro_app.stop()
+        except Exception:
+            pass
+
+
+async def pyro_send_large(chat_id: int, filepath: str, status_msg=None):
+    """Send a file up to 2 GB via Pyrogram MTProto, with upload progress."""
+    ext = os.path.splitext(filepath)[1].lower()
+    w, h = get_video_dimensions(filepath) if ext not in IMAGE_EXTS else (0, 0)
+
+    last_edit: list[float] = [0.0]
+
+    async def on_progress(current: int, total: int):
+        now = time.monotonic()
+        if status_msg and total and now - last_edit[0] > 2.5:
+            last_edit[0] = now
+            try:
+                percent = min(current / total * 100, 100)
+                filled = int(10 * percent / 100)
+                bar = '█' * filled + '░' * (10 - filled)
+                mb_now = current / 1024 / 1024
+                mb_total = total / 1024 / 1024
+                await status_msg.edit_text(
+                    t(chat_id, 'uploading') +
+                    f'\n[{bar}] {percent:.0f}% ({mb_now:.0f}/{mb_total:.0f} {t(chat_id, "mb")})'
+                )
+            except Exception:
+                pass
+
+    if status_msg:
+        try:
+            await status_msg.edit_text(t(chat_id, 'uploading') + '...')
+        except Exception:
+            pass
+
+    if ext in IMAGE_EXTS:
+        await pyro_app.send_photo(chat_id, filepath, progress=on_progress)
+    else:
+        await pyro_app.send_video(
+            chat_id, filepath,
+            width=w or 0, height=h or 0,
+            supports_streaming=True,
+            progress=on_progress,
+        )
+
+
 def find_downloaded_file(ydl, entry: dict) -> str | None:
     filename = ydl.prepare_filename(entry)
     if os.path.exists(filename):
@@ -497,6 +584,30 @@ async def send_file(chat_id: int, filepath: str, title: str, context: ContextTyp
                         None, transcode_to_h264_sync, filepath
                     )
                     send_path = transcoded_path if transcoded_path else filepath
+                    send_size = os.path.getsize(send_path)
+                    if send_size > MAX_FILE_SIZE:
+                        if pyro_app and send_size <= 2 * 1024 * 1024 * 1024:
+                            await pyro_send_large(chat_id, send_path, None)
+                            return
+                        else:
+                            n_parts = math.ceil(send_size / (40 * 1024 * 1024))
+                            await context.bot.send_message(
+                                chat_id, t(chat_id, 'splitting', send_size / 1024 / 1024, n_parts)
+                            )
+                            split_parts = await loop.run_in_executor(None, split_video_sync, send_path)
+                            if not split_parts:
+                                await context.bot.send_message(chat_id, t(chat_id, 'split_failed'))
+                                return
+                            w, h = get_video_dimensions(send_path)
+                            for i, part in enumerate(split_parts, 1):
+                                with open(part, 'rb') as pf:
+                                    await context.bot.send_video(
+                                        chat_id, video=pf, supports_streaming=True,
+                                        width=w or None, height=h or None,
+                                        caption=t(chat_id, 'part', i, len(split_parts))
+                                    )
+                                os.remove(part)
+                            return
                     w, h = get_video_dimensions(send_path)
                     with open(send_path, 'rb') as vf:
                         await context.bot.send_video(
@@ -528,7 +639,7 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
         )
     try:
         ydl_opts = {
-            'outtmpl': os.path.join(DOWNLOAD_PATH, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(DOWNLOAD_PATH, f'{chat_id}_%(title)s.%(ext)s'),
             'quiet': True,
             'no_warnings': True,
             'format': f'{format_id}+bestaudio[ext=m4a]/bestaudio/best' if format_id else 'bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
@@ -548,27 +659,40 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             filesize = os.path.getsize(filepath)
             ext = os.path.splitext(filepath)[1].lower()
 
+            PYRO_MAX = 2000 * 1024 * 1024  # 2000 MiB — жёсткий лимит Telegram MTProto
             if filesize > MAX_FILE_SIZE and ext not in IMAGE_EXTS:
-                # Спрашиваем пользователя что делать с большим файлом
-                n_parts = math.ceil(filesize / (40 * 1024 * 1024))
-                user_data.setdefault(chat_id, {})['pending_large'] = {
-                    'filepath': filepath,
-                    'title': result['title'],
-                }
-                keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(
-                        t(chat_id, 'btn_split', n_parts), callback_data='act_split'
-                    )],
-                    [InlineKeyboardButton(
-                        t(chat_id, 'btn_compress'), callback_data='act_compress'
-                    )],
-                ])
-                await context.bot.send_message(
-                    chat_id,
-                    t(chat_id, 'large_file_choice', filesize / 1024 / 1024),
-                    reply_markup=keyboard
-                )
-                # Файл не удаляем — он нужен для обработки по кнопке
+                if pyro_app and filesize <= PYRO_MAX:
+                    # Отправляем напрямую через Pyrogram (до 2000 МБ)
+                    stop_event.set()
+                    if progress_task and not progress_task.done():
+                        progress_task.cancel()
+                        try:
+                            await progress_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    downloaded_paths.append(filepath)
+                    await pyro_send_large(chat_id, filepath, status_msg)
+                else:
+                    # Спрашиваем пользователя что делать с большим файлом
+                    n_parts = math.ceil(filesize / (40 * 1024 * 1024))
+                    user_data.setdefault(chat_id, {})['pending_large'] = {
+                        'filepath': filepath,
+                        'title': result['title'],
+                    }
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(
+                            t(chat_id, 'btn_split', n_parts), callback_data='act_split'
+                        )],
+                        [InlineKeyboardButton(
+                            t(chat_id, 'btn_compress'), callback_data='act_compress'
+                        )],
+                    ])
+                    await context.bot.send_message(
+                        chat_id,
+                        t(chat_id, 'large_file_choice', filesize / 1024 / 1024),
+                        reply_markup=keyboard
+                    )
+                    # Файл не удаляем — он нужен для обработки по кнопке
             else:
                 downloaded_paths.append(filepath)
                 await send_file(chat_id, filepath, result['title'], context)
@@ -673,6 +797,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         video_formats = deduplicate_formats(video_formats)
+        PYRO_MAX_MB = 2000 * 1024 * 1024
+        video_formats = [
+            f for f in video_formats
+            if not f['filesize'] or f['filesize'] <= PYRO_MAX_MB
+        ]
         user_data[chat_id] = {'url': url, 'formats': video_formats}
 
         keyboard = []
@@ -782,8 +911,23 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===== ЗАПУСК =====
+async def post_init(_application: Application):
+    await init_pyrogram()
+
+
+async def post_shutdown(_application: Application):
+    await shutdown_pyrogram()
+
+
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .concurrent_updates(True)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('language', language_command))
