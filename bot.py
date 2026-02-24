@@ -645,7 +645,7 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             'format': f'{format_id}+bestaudio/bestaudio/best' if format_id else 'bestvideo+bestaudio/best',
             'merge_output_format': 'mp4',
             'progress_hooks': [make_progress_hook(progress_state)],
-            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'js_runtimes': {'node': {}},
         }
         if os.path.exists(YOUTUBE_COOKIES):
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES
@@ -780,7 +780,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}},
+            'js_runtimes': {'node': {}},
         }
         if os.path.exists(YOUTUBE_COOKIES):
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES
