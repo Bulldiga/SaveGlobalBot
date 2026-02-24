@@ -642,7 +642,7 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             'outtmpl': os.path.join(DOWNLOAD_PATH, f'{chat_id}_%(title)s.%(ext)s'),
             'quiet': True,
             'no_warnings': True,
-            'format': f'{format_id}+bestaudio[ext=m4a]/bestaudio/best' if format_id else 'bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
+            'format': f'{format_id}+bestaudio/bestaudio/best' if format_id else 'bestvideo+bestaudio/best',
             'merge_output_format': 'mp4',
             'progress_hooks': [make_progress_hook(progress_state)],
         }
