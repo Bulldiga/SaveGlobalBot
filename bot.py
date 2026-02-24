@@ -227,12 +227,19 @@ def download_instagram_sync(url: str) -> list:
     )
 
     ig_user = os.environ.get('INSTAGRAM_USER')
-    ig_pass = os.environ.get('INSTAGRAM_PASS')
-    if ig_user and ig_pass:
+    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f'session-{ig_user}') if ig_user else None
+    if session_file and os.path.exists(session_file):
         try:
-            L.login(ig_user, ig_pass)
+            L.load_session_from_file(ig_user, session_file)
         except Exception:
             pass
+    elif ig_user:
+        ig_pass = os.environ.get('INSTAGRAM_PASS')
+        if ig_pass:
+            try:
+                L.login(ig_user, ig_pass)
+            except Exception:
+                pass
 
     post = instaloader.Post.from_shortcode(L.context, shortcode)
     L.download_post(post, target=DOWNLOAD_PATH)
