@@ -26,6 +26,9 @@ DOWNLOAD_PATH = 'downloads'
 MAX_FILE_SIZE = 50 * 1024 * 1024
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
 
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+YOUTUBE_COOKIES = os.path.join(_BASE_DIR, 'youtube_cookies.txt')
+
 os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
 # {chat_id: {'url': str, 'formats': list}}
@@ -643,6 +646,8 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             'merge_output_format': 'mp4',
             'progress_hooks': [make_progress_hook(progress_state)],
         }
+        if os.path.exists(YOUTUBE_COOKIES):
+            ydl_opts['cookiefile'] = YOUTUBE_COOKIES
 
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(None, download_media_sync, ydl_opts, url)
@@ -772,6 +777,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         ydl_opts = {'quiet': True, 'no_warnings': True}
+        if os.path.exists(YOUTUBE_COOKIES):
+            ydl_opts['cookiefile'] = YOUTUBE_COOKIES
         loop = asyncio.get_running_loop()
         info = await loop.run_in_executor(None, get_formats_sync, ydl_opts, url)
         formats = info.get('formats', [])
