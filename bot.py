@@ -217,6 +217,10 @@ def download_instagram_sync(url: str) -> list:
         'no_warnings': True,
         'format': 'bestvideo+bestaudio/bestvideo/best',
         'merge_output_format': 'mp4',
+        'http_headers': {
+            'X-IG-App-ID': '936619743392459',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        },
     }
     if os.path.exists(cookies_file):
         opts['cookiefile'] = cookies_file
