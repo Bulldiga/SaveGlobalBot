@@ -215,7 +215,8 @@ def download_instagram_sync(url: str) -> list:
         'outtmpl': os.path.join(DOWNLOAD_PATH, '%(id)s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
-        'format': 'best',
+        'format': 'bestvideo+bestaudio/bestvideo/best',
+        'merge_output_format': 'mp4',
     }
     if os.path.exists(cookies_file):
         opts['cookiefile'] = cookies_file
