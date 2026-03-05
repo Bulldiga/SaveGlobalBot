@@ -28,6 +28,7 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 YOUTUBE_COOKIES = os.path.join(_BASE_DIR, 'youtube_cookies.txt')
+X_COOKIES = os.path.join(_BASE_DIR, 'x_cookies.txt')
 
 os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
@@ -45,12 +46,13 @@ STRINGS = {
     'ru': {
         'welcome': (
             'Привет! Отправь мне ссылку на видео или публикацию '
-            'с YouTube, Instagram, TikTok или Twitch.\n\n'
+            'с YouTube, Instagram, TikTok, Twitch или X (Twitter).\n\n'
             'Поддерживается: видео, длинные стримы, Reels, фото-посты, карусели Instagram.'
         ),
         'choose_lang': 'Выберите язык:',
         'lang_set': 'Язык изменён на Русский 🇷🇺',
         'send_link': 'Пожалуйста, отправь корректную ссылку (начинается с http:// или https://).',
+        'unsupported_link': 'Ссылка не поддерживается. Отправь ссылку на видео из YouTube, Instagram, TikTok, Twitch или X (Twitter).',
         'getting_info': 'Получаю информацию...',
         'downloading': 'Скачиваю',
         'choose_quality': 'Выберите качество:',
@@ -79,12 +81,13 @@ STRINGS = {
     'en': {
         'welcome': (
             'Hello! Send me a link to a video or post '
-            'from YouTube, Instagram, TikTok, or Twitch.\n\n'
+            'from YouTube, Instagram, TikTok, Twitch, or X (Twitter).\n\n'
             'Supported: videos, long streams, Reels, photo posts, Instagram carousels.'
         ),
         'choose_lang': 'Choose language:',
         'lang_set': 'Language changed to English 🇬🇧',
         'send_link': 'Please send a valid link (starting with http:// or https://).',
+        'unsupported_link': 'This link is not supported. Send a video link from YouTube, Instagram, TikTok, Twitch, or X (Twitter).',
         'getting_info': 'Getting info...',
         'downloading': 'Downloading',
         'choose_quality': 'Choose quality:',
@@ -112,13 +115,14 @@ STRINGS = {
     },
     'kz': {
         'welcome': (
-            'Сәлем! Маған YouTube, Instagram, TikTok немесе Twitch-тен '
+            'Сәлем! Маған YouTube, Instagram, TikTok, Twitch немесе X (Twitter)-тен '
             'бейне немесе жарияланым сілтемесін жіберіңіз.\n\n'
             'Қолдау: бейнелер, ұзын стримдер, Reels, фото жарияланымдар, Instagram карусельдері.'
         ),
         'choose_lang': 'Тілді таңдаңыз:',
         'lang_set': 'Тіл Қазақшаға өзгертілді 🇰🇿',
         'send_link': 'Дұрыс сілтеме жіберіңіз (http:// немесе https:// басталатын).',
+        'unsupported_link': 'Бұл сілтеме қолданылмайды. YouTube, Instagram, TikTok, Twitch немесе X (Twitter) бейне сілтемесін жіберіңіз.',
         'getting_info': 'Ақпарат алынуда...',
         'downloading': 'Жүктелуде',
         'choose_quality': 'Сапаны таңдаңыз:',
@@ -147,12 +151,13 @@ STRINGS = {
     'uk': {
         'welcome': (
             'Привіт! Надішли мені посилання на відео або публікацію '
-            'з YouTube, Instagram, TikTok або Twitch.\n\n'
+            'з YouTube, Instagram, TikTok, Twitch або X (Twitter).\n\n'
             'Підтримується: відео, довгі стріми, Reels, фото-пости, каруселі Instagram.'
         ),
         'choose_lang': 'Оберіть мову:',
         'lang_set': 'Мову змінено на Українську 🇺🇦',
         'send_link': 'Будь ласка, надішли коректне посилання (починається з http:// або https://).',
+        'unsupported_link': 'Це посилання не підтримується. Надішли посилання на відео з YouTube, Instagram, TikTok, Twitch або X (Twitter).',
         'getting_info': 'Отримую інформацію...',
         'downloading': 'Завантажую',
         'choose_quality': 'Оберіть якість:',
@@ -205,6 +210,10 @@ def is_valid_url(text: str) -> bool:
 
 def is_instagram_url(url: str) -> bool:
     return 'instagram.com' in url
+
+
+def is_twitter_url(url: str) -> bool:
+    return 'twitter.com' in url or 'x.com' in url or 't.co' in url
 
 
 def get_instagram_shortcode(url: str) -> str | None:
@@ -647,7 +656,9 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
             'progress_hooks': [make_progress_hook(progress_state)],
             'js_runtimes': {'node': {}},
         }
-        if os.path.exists(YOUTUBE_COOKIES):
+        if is_twitter_url(url) and os.path.exists(X_COOKIES):
+            ydl_opts['cookiefile'] = X_COOKIES
+        elif os.path.exists(YOUTUBE_COOKIES):
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES
 
         loop = asyncio.get_running_loop()
@@ -701,7 +712,8 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
                 await send_file(chat_id, filepath, result['title'], context)
 
     except yt_dlp.utils.DownloadError as e:
-        if 'no video' in str(e).lower() or 'there is no video' in str(e).lower():
+        err = str(e).lower()
+        if 'no video' in err or 'there is no video' in err:
             try:
                 loop = asyncio.get_running_loop()
                 results = await loop.run_in_executor(None, download_instagram_sync, url)
@@ -713,6 +725,8 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
                     await send_file(chat_id, result['filepath'], result['title'], context)
             except Exception as ie:
                 await context.bot.send_message(chat_id, t(chat_id, 'instagram_error', ie))
+        elif 'unsupported url' in err or 'no suitable extractor' in err or 'unable to extract' in err:
+            await context.bot.send_message(chat_id, t(chat_id, 'unsupported_link'))
         else:
             await context.bot.send_message(chat_id, t(chat_id, 'download_error', e))
     except Exception as e:
@@ -782,7 +796,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'no_warnings': True,
             'js_runtimes': {'node': {}},
         }
-        if os.path.exists(YOUTUBE_COOKIES):
+        if is_twitter_url(url) and os.path.exists(X_COOKIES):
+            ydl_opts['cookiefile'] = X_COOKIES
+        elif os.path.exists(YOUTUBE_COOKIES):
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES
         loop = asyncio.get_running_loop()
         info = await loop.run_in_executor(None, get_formats_sync, ydl_opts, url)
@@ -834,6 +850,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await download_and_send(url, chat_id, context, status_msg=status_msg)
         elif 'login' in err or 'sign in' in err:
             await status_msg.edit_text(t(chat_id, 'auth_required'))
+        elif 'unsupported url' in err or 'no suitable extractor' in err or 'unable to extract' in err:
+            await status_msg.edit_text(t(chat_id, 'unsupported_link'))
         else:
             await status_msg.edit_text(t(chat_id, 'error', e))
     except Exception as e:
