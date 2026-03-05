@@ -725,6 +725,9 @@ async def download_and_send(url: str, chat_id: int, context: ContextTypes.DEFAUL
                     await send_file(chat_id, result['filepath'], result['title'], context)
             except Exception as ie:
                 await context.bot.send_message(chat_id, t(chat_id, 'instagram_error', ie))
+        elif 'requested format is not available' in err and format_id:
+            # Выбранный формат недоступен — скачиваем лучший доступный
+            await download_and_send(url, chat_id, context, format_id=None, status_msg=status_msg)
         elif 'unsupported url' in err or 'no suitable extractor' in err or 'unable to extract' in err:
             await context.bot.send_message(chat_id, t(chat_id, 'unsupported_link'))
         else:
